@@ -1,17 +1,18 @@
-# persona_rag_app.py
+# agentic_persona_rag_app.py
 
 import os
 import streamlit as st
 import PyPDF2
 from dotenv import load_dotenv
-import openai
+from openai import OpenAI  # <-- Correct import for SDK v1+
 import faiss
 import numpy as np
 from typing import List
+from datetime import datetime
 
 # Load API key
 load_dotenv()
-client = openai.OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))  # <-- Updated client creation
 
 # Constants
 EMBED_MODEL = "text-embedding-ada-002"
@@ -53,7 +54,10 @@ def embed_texts(texts: List[str]) -> np.ndarray:
     embeddings = []
     for i in range(0, len(texts), 20):
         batch = texts[i:i+20]
-        response = client.embeddings.create(model=EMBED_MODEL, input=batch)
+        response = client.embeddings.create(  # <-- Corrected method
+            model=EMBED_MODEL,
+            input=batch
+        )
         batch_embeds = [e.embedding for e in response.data]
         embeddings.extend(batch_embeds)
     return np.array(embeddings).astype("float32")
@@ -78,21 +82,35 @@ Question: {query}
 
 Respond in a professional tone tailored to the needs and pain points of this role.
 """
-    response = client.chat.completions.create(
+    response = client.chat.completions.create(  # <-- Correct usage for GPT-4
         model="gpt-4",
         messages=[{"role": "user", "content": prompt}]
     )
     return response.choices[0].message.content.strip()
 
-# Streamlit UI
-st.set_page_config(page_title="Persona-Based RAG Assistant", layout="wide")
-st.title("🔎 Persona-Based Technical Assistant (RAG Prototype)")
+# Agent loop (simple version)
+def run_agent(goal, persona_desc):
+    steps = [
+        f"Interpret the goal from the perspective of a {persona_desc}.",
+        "Break the goal into 2-3 sub-questions to ask the RAG system.",
+        "Summarize final answer and provide action steps or insight."
+    ]
+    st.subheader("🧠 Agent Thinking Steps")
+    for step in steps:
+        st.markdown(f"**Step:** {step}")
+        context_chunks = search_chunks(step)
+        thought = ask_persona_question(step, persona_desc, context_chunks)
+        st.markdown(f"> {thought}")
 
-# Upload and embed documents
+# UI
+st.set_page_config(page_title="Agentic Persona RAG", layout="wide")
+st.title("🧠 Agentic Persona-Based Technical Assistant")
+
 with st.sidebar:
-    st.header("📄 Upload Documents")
-    uploaded_files = st.file_uploader("Choose one or more technical PDFs", type="pdf", accept_multiple_files=True)
+    st.header("📄 Upload PDFs")
+    uploaded_files = st.file_uploader("Upload technical PDFs", type="pdf", accept_multiple_files=True)
 
+# Process uploaded PDFs
 if uploaded_files:
     for uploaded_file in uploaded_files:
         st.success(f"Uploaded: {uploaded_file.name}")
@@ -100,24 +118,16 @@ if uploaded_files:
         chunks = chunk_text(raw_text)
         embeds = embed_texts(chunks)
 
-        # Store chunks and index
         for i, chunk in enumerate(chunks):
             doc_chunks.append((chunk, uploaded_file.name, None))
         index.add(embeds)
+    st.info(f"Indexed {len(doc_chunks)} chunks from {len(uploaded_files)} document(s).")
 
-    st.info(f"Indexed a total of {len(doc_chunks)} chunks from {len(uploaded_files)} documents.")
-
-# Query section
+# Query interface
 personas = load_personas()
 persona_label = st.selectbox("Select Your Persona", list(personas.keys()))
 persona_desc = personas[persona_label]
 
-query = st.text_input("Ask a question related to the uploaded documents:")
-if st.button("Ask") and query:
-    top_chunks = search_chunks(query)
-    response = ask_persona_question(query, persona_desc, top_chunks)
-    st.subheader(f"Answer for {persona_label} Persona")
-    st.write(response)
-    with st.expander("🔍 View Supporting Context"):
-        for chunk, source, _ in top_chunks:
-            st.markdown(f"**From {source}**\n> {chunk[:300]}...")
+goal = st.text_input("Enter your analytical goal or question (e.g. 'Evaluate the fabless risk implications'): ")
+if st.button("Run Agent") and goal:
+    run_agent(goal, persona_desc)
